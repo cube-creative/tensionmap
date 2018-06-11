@@ -101,7 +101,16 @@ def tm_update(obj, scene):
         obj.modifiers[i].show_viewport = show_original_state[i]
 
     # array to store new weight for each vertices
-    weights = [0.0] * len(obj.data.vertices)
+    weights = [1.0] * len(obj.data.vertices)
+
+    # scale compensation
+    if obj.data.tm_scale_target:
+        if obj.data.tm_scale_subtarget != "":
+            compensation = obj.data.tm_scale_target.pose.bones[obj.data.tm_scale_subtarget].scale.x
+        else:
+            compensation = obj.data.tm_scale_target.scale.x
+    else:
+        compensation = 1.0
 
     # calculate the new weights
     for edge in obj.data.edges:
@@ -112,25 +121,27 @@ def tm_update(obj, scene):
         deformed_edge_length = (deformed_mesh.vertices[first_vertex].co - deformed_mesh.vertices[second_vertex].co).length
 
         # TODO: give more option, like minimum, maximum, logarithmic, etc
-        deformation_factor = (original_edge_length - deformed_edge_length) * obj.data.tm_multiply
+        if abs(original_edge_length) > 0.0001 and abs(compensation) > 0.0001: # not null
+            deformation_factor = (deformed_edge_length / original_edge_length) * obj.data.tm_multiply / compensation
+        else: # if original length is equal to zero, then there is no deformation
+            deformation_factor = 1.
 
         # store the weights by subtracting to overlay all the factors for each vertex
-        weights[first_vertex] -= deformation_factor
-        weights[second_vertex] -= deformation_factor
+        weights[first_vertex] *= deformation_factor
+        weights[second_vertex] *= deformation_factor
 
     # delete the temporary deformed mesh
     bpy.data.meshes.remove(deformed_mesh)
 
     # put the new values in the vertex groups
     for i in range(len(obj.data.vertices)):
-        if weights[i] >= 0:
-            # positive: squeezed
+        if weights[i] < 1.0:
+            # less than 1: squeezed
             obj.vertex_groups[index_stretch].add([i], 0.0, "REPLACE")
-            obj.vertex_groups[index_squeeze].add([i], weights[i], "REPLACE")
+            obj.vertex_groups[index_squeeze].add([i], 1.0 - weights[i], "REPLACE")
         else:
-            # negative: stretched
-            # invert weights to keep only positive values
-            obj.vertex_groups[index_stretch].add([i], -weights[i], "REPLACE")
+            # greater then 1: stretched
+            obj.vertex_groups[index_stretch].add([i], 1.0 - 1.0 / weights[i], "REPLACE")
             obj.vertex_groups[index_squeeze].add([i], 0.0, "REPLACE")
 
     # put the new values from the vertex groups in the vertex colors
@@ -203,6 +214,13 @@ class TmPanel(bpy.types.Panel):
     bl_region_type = "WINDOW"
     bl_context = "data"
 
+    @staticmethod
+    def target_template(layout, mesh):
+        layout.prop(mesh, "tm_scale_target")
+        if mesh.tm_scale_target:
+            if mesh.tm_scale_target.type == 'ARMATURE':
+                layout.prop_search(mesh, "tm_scale_subtarget", mesh.tm_scale_target.data, "bones", text="Bone")
+
     def draw_header(self, context):
         if context.object.type != "MESH": return
 
@@ -216,6 +234,8 @@ class TmPanel(bpy.types.Panel):
         row.active = context.object.data.tm_active
         row.prop(context.object.data, "tm_multiply", text="Multiplier")
         row.operator("tm.update_selected")
+        row = self.layout.column()
+        self.target_template(row, context.object.data)
 
 
 def add_props():
@@ -228,7 +248,10 @@ def add_props():
     bpy.types.Mesh.tm_multiply = \
         bpy.props.FloatProperty(name="tm_multiply", description="Tension map intensity multiplier", min=0.0, max=1000.0,
                                 default=1.0)
-
+    bpy.types.Mesh.tm_scale_target = \
+        bpy.props.PointerProperty(type=bpy.types.Object, name="Scale compensation target", description="Object whose scale compensates the tension strength")
+    bpy.types.Mesh.tm_scale_subtarget = \
+        bpy.props.StringProperty(name="Scale compensation subtarget", description="Sub-object whose scale compensates the tension strength")
 
 def remove_props():
     """
@@ -237,6 +260,8 @@ def remove_props():
     """
     del bpy.types.Mesh.tm_active
     del bpy.types.Mesh.tm_multiply
+    del bpy.types.Mesh.tm_scale_target
+    del bpy.types.Mesh.tm_scale_subtarget
 
 
 def add_handlers():
