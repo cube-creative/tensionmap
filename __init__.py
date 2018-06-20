@@ -104,13 +104,16 @@ def tm_update(obj, scene):
     weights = [1.0] * len(obj.data.vertices)
 
     # scale compensation
-    if obj.data.tm_scale_target:
-        if obj.data.tm_scale_subtarget != "":
-            compensation = obj.data.tm_scale_target.pose.bones[obj.data.tm_scale_subtarget].scale.x
+    if obj.data.tm_compensation_source == "OBJECT":
+        if obj.data.tm_scale_target:
+            if obj.data.tm_scale_subtarget != "":
+                compensation = obj.data.tm_scale_target.pose.bones[obj.data.tm_scale_subtarget].scale.x
+            else:
+                compensation = obj.data.tm_scale_target.scale.x
         else:
-            compensation = obj.data.tm_scale_target.scale.x
-    else:
-        compensation = 1.0
+            compensation = 1.0
+    elif obj.data.tm_compensation_source == "DIVIDE":
+        compensation = obj.data.tm_divide
 
     # calculate the new weights
     for edge in obj.data.edges:
@@ -234,9 +237,13 @@ class TmPanel(bpy.types.Panel):
         row.active = context.object.data.tm_active
         row.prop(context.object.data, "tm_multiply", text="Multiplier")
         row.operator("tm.update_selected")
+        self.layout.label(text="Scale compensation method:", )
+        self.layout.prop(context.object.data, "tm_compensation_source", expand=True)
         row = self.layout.column()
-        self.target_template(row, context.object.data)
-
+        if context.object.data.tm_compensation_source == "OBJECT":
+            self.target_template(row, context.object.data)
+        elif context.object.data.tm_compensation_source == "DIVIDE":
+            row.prop(context.object.data, "tm_divide")
 
 def add_props():
     """
@@ -248,10 +255,14 @@ def add_props():
     bpy.types.Mesh.tm_multiply = \
         bpy.props.FloatProperty(name="tm_multiply", description="Tension map intensity multiplier", min=0.0, max=1000.0,
                                 default=1.0)
+    bpy.types.Mesh.tm_divide = \
+        bpy.props.FloatProperty(name="tm_divide", description="Tension map intensity divider", min=0.000001, max=10000000.0,
+                                default=1.0)
     bpy.types.Mesh.tm_scale_target = \
         bpy.props.PointerProperty(type=bpy.types.Object, name="Scale compensation target", description="Object whose scale compensates the tension strength")
     bpy.types.Mesh.tm_scale_subtarget = \
         bpy.props.StringProperty(name="Scale compensation subtarget", description="Sub-object whose scale compensates the tension strength")
+    bpy.types.Mesh.tm_compensation_source = bpy.props.EnumProperty(items=[("OBJECT", "Object", "Object X scale"), ("DIVIDE", "Divide", "Divider property")], description="How the tension strength is compensated", default="OBJECT")
 
 def remove_props():
     """
@@ -260,8 +271,10 @@ def remove_props():
     """
     del bpy.types.Mesh.tm_active
     del bpy.types.Mesh.tm_multiply
+    del bpy.types.Mesh.tm_divide
     del bpy.types.Mesh.tm_scale_target
     del bpy.types.Mesh.tm_scale_subtarget
+    del bpy.types.Mesh.tm_compensation_source
 
 
 def add_handlers():
